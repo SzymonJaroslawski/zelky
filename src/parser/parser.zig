@@ -24,6 +24,11 @@ pub const Expr = union(enum) {
         name: []const u8,
         value: *Expr,
     },
+
+    call: struct {
+        callee: *Expr,
+        args: []*Expr,
+    },
 };
 
 pub const Stmt = union(enum) {
@@ -42,6 +47,14 @@ pub const Stmt = union(enum) {
     },
 
     ret_stmt: *Expr,
+
+    fn_decl: FnDecl,
+};
+
+pub const FnDecl = struct {
+    name: []const u8,
+    params: [][]const u8,
+    body: *Stmt,
 };
 
 fn infixBindingPower(kind: TokenKind) ?struct { left: u8, right: u8 } {
@@ -156,6 +169,7 @@ pub const Parser = struct {
             .kw_if => self.parseIf(),
             .kw_let => self.parseLet(),
             .kw_return => self.parseReturn(),
+            .kw_func => self.parseFnDecl(),
             else => self.parseExprStmt(),
         };
     }
@@ -207,10 +221,58 @@ pub const Parser = struct {
         return .{ .ret_stmt = expr };
     }
 
+    fn parseFnDecl(self: *Parser) ParserError!Stmt {
+        _ = try self.expect(.kw_func);
+        const name = try self.expect(.identifier);
+        _ = try self.expect(.lparen);
+
+        var params = try std.ArrayList([]const u8).initCapacity(self.alloc, 5);
+        if (self.current.kind != .rparen) {
+            while (true) {
+                const param = try self.expect(.identifier);
+                try params.append(self.alloc, param.lexeme);
+                if (self.current.kind != .comma) break;
+                _ = self.advance();
+            }
+        }
+        _ = try self.expect(.rparen);
+
+        const body = try self.alloc_stmt(try self.parseBlock());
+
+        return .{ .fn_decl = .{
+            .name = name.lexeme,
+            .params = try params.toOwnedSlice(self.alloc),
+            .body = body,
+        } };
+    }
+
     fn parseExprStmt(self: *Parser) ParserError!Stmt {
         const expr = try self.parseExpr();
         _ = try self.expect(.semicolon);
         return .{ .expr_stmt = expr };
+    }
+
+    fn parseCall(self: *Parser) ParserError!*Expr {
+        var expr = try self.parseAtom();
+
+        while (self.current.kind == .lparen) {
+            _ = self.advance();
+
+            var args = try std.ArrayList(*Expr).initCapacity(self.alloc, 5);
+
+            if (self.current.kind != .rparen) {
+                while (true) {
+                    try args.append(self.alloc, try self.parseExpr());
+                    if (self.current.kind != .comma) break;
+                    _ = self.advance();
+                }
+            }
+            _ = try self.expect(.rparen);
+
+            expr = try self.alloc_expr(.{ .call = .{ .callee = expr, .args = try args.toOwnedSlice(self.alloc) } });
+        }
+
+        return expr;
     }
 
     fn parseBindingPower(self: *Parser, min_bp: u8) ParserError!*Expr {
@@ -237,7 +299,7 @@ pub const Parser = struct {
             const operand = try self.parseBindingPower(bp);
             return self.alloc_expr(.{ .unary = .{ .op = op, .operand = operand } });
         }
-        return self.parseAtom();
+        return self.parseCall();
     }
 
     fn parseAtom(self: *Parser) ParserError!*Expr {

@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const parser = @import("../parser/parser.zig");
 
 pub const OpCode = enum(u8) {
@@ -21,47 +23,162 @@ pub const OpCode = enum(u8) {
     op_jump_if_false,
     op_jump,
     op_get_local,
+    op_get_global,
     op_set_local,
+    op_define_global,
+    op_call,
     op_return,
     op_halt,
+
+    // Superinstructions
+    op_sub_local_imm,
+    op_plus_local_imm,
+    op_greater_local_imm,
+    op_less_local_imm,
+
+    op_add_local_local,
+    op_sub_local_local,
+};
+
+const is_debug = builtin.mode == .Debug;
+
+pub const Diagnostic = struct {
+    message: []u8,
+};
+
+pub const Diagnostics = struct {
+    list: if (is_debug) std.ArrayList(Diagnostic) else void,
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) !Diagnostics {
+        if (!is_debug) {
+            std.debug.print("Not debug build, no diagnostics", .{});
+
+            return .{
+                .list = {},
+                .alloc = alloc,
+            };
+        }
+
+        return .{
+            .list = try std.ArrayList(Diagnostic).initCapacity(alloc, 0),
+            .alloc = alloc,
+        };
+    }
+
+    pub fn deinit(self: *Diagnostics) void {
+        if (!is_debug) return;
+
+        self.list.deinit(self.alloc);
+    }
+
+    pub fn report(self: *Diagnostics, comptime format: []const u8, args: anytype) error{ CompileError, OutOfMemory }!void {
+        if (!is_debug) return;
+
+        const msg = try std.fmt.allocPrint(self.alloc, format, args);
+        try self.list.append(self.alloc, .{ .message = msg });
+    }
+
+    pub fn hasErrors(self: *const Diagnostics) bool {
+        if (!is_debug) return false;
+
+        return self.list.items.len > 0;
+    }
+
+    pub fn printAll(self: *const Diagnostics) void {
+        if (!is_debug) return;
+
+        for (self.list.items) |diag| {
+            std.debug.print("Compile error: {s}\n", .{diag.message});
+        }
+    }
+};
+
+pub const Globals = std.StringHashMap(u8);
+
+pub const Function = struct {
+    name: []const u8 = "",
+    arity: usize = 0,
+    chunk: Chunk,
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) !Function {
+        return .{
+            .alloc = alloc,
+            .chunk = try Chunk.init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *Function) void {
+        self.chunk.deinit();
+    }
+
+    pub fn compile(self: *Function, fndec: *const parser.FnDecl, globals: *Globals, diags: *Diagnostics) anyerror!void {
+        var compl = try Compiler.init(self.alloc, &self.chunk, globals, diags);
+        defer compl.deinit();
+
+        self.name = fndec.name;
+        self.arity = fndec.params.len;
+
+        for (fndec.params) |param| {
+            try compl.declareLocal(param);
+        }
+
+        try compl.compileStmt(fndec.body);
+
+        try self.chunk.emitConstant(.{ .number = 0 });
+        try self.chunk.emitOp(.op_return);
+    }
 };
 
 pub const Value = union(enum) {
     number: f64,
     boolean: bool,
+    function: *const Function,
 };
 
-pub fn disassemble(chunk: *const Chunk, writer: *std.Io.Writer) !void {
+pub fn disassemble(chunk: *const Chunk) !void {
     var offset: usize = 0;
     while (offset < chunk.code.items.len) {
-        offset = try disassembleInstruction(chunk, offset, writer);
+        offset = try disassembleInstruction(chunk, offset);
     }
 }
 
-fn disassembleInstruction(chunk: *const Chunk, offset: usize, writer: *std.Io.Writer) !usize {
-    try writer.print("{d:0>4}  ", .{offset});
+fn disassembleInstruction(chunk: *const Chunk, offset: usize) !usize {
+    std.debug.print("{d:0>4}  ", .{offset});
     const op: OpCode = @enumFromInt(chunk.code.items[offset]);
 
     return switch (op) {
         .op_constant => blk: {
             const index = chunk.code.items[offset + 1];
-            try writer.print("OP_CONSTANT      {d} ({any})\n", .{ index, chunk.constants.items[index] });
+            std.debug.print("OP_CONSTANT      {d} ({any})\n", .{ index, chunk.constants.items[index] });
             break :blk offset + 2;
         },
-        .op_get_local, .op_set_local => blk: {
+        .op_get_local, .op_set_local, .op_get_global, .op_define_global => blk: {
             const slot = chunk.code.items[offset + 1];
-            try writer.print("{s: <16} slot {d}\n", .{ @tagName(op), slot });
+            std.debug.print("{s: <16} slot {d}\n", .{ @tagName(op), slot });
             break :blk offset + 2;
+        },
+        .op_call => blk: {
+            const argc = chunk.code.items[offset + 1];
+            std.debug.print("OP_CALL          argc {d}\n", .{argc});
+            break :blk offset + 2;
+        },
+        .op_sub_local_imm, .op_less_local_imm => blk: {
+            const slot = chunk.code.items[offset + 1];
+            const imm = chunk.code.items[offset + 2];
+            std.debug.print("{s: <16} slot {d}, imm {d}\n", .{ @tagName(op), slot, imm });
+            break :blk offset + 3;
         },
         .op_jump, .op_jump_if_false => blk: {
             const jump_offset = (@as(u16, chunk.code.items[offset + 1]) << 8) | chunk.code.items[offset + 2];
             const target = offset + 3 + jump_offset;
-            try writer.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
+            std.debug.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
             break :blk offset + 3;
         },
         // Everything else is a single byte with no operand.
         else => blk: {
-            try writer.print("{s}\n", .{@tagName(op)});
+            std.debug.print("{s}\n", .{@tagName(op)});
             break :blk offset + 1;
         },
     };
@@ -75,8 +192,8 @@ pub const Chunk = struct {
     pub fn init(alloc: std.mem.Allocator) !Chunk {
         return .{
             .alloc = alloc,
-            .code = try std.ArrayList(u8).initCapacity(alloc, 1024),
-            .constants = try std.ArrayList(Value).initCapacity(alloc, 1024),
+            .code = try std.ArrayList(u8).initCapacity(alloc, 256),
+            .constants = try std.ArrayList(Value).initCapacity(alloc, 32),
         };
     }
 
@@ -128,9 +245,17 @@ pub const Compiler = struct {
     locals: std.ArrayList(Local),
     scope_depth: usize = 0,
     alloc: std.mem.Allocator,
+    globals: *Globals,
+    diags: *Diagnostics,
 
-    pub fn init(alloc: std.mem.Allocator, chunk: *Chunk) !Compiler {
-        return .{ .chunk = chunk, .locals = try std.ArrayList(Local).initCapacity(alloc, 0), .alloc = alloc };
+    pub fn init(alloc: std.mem.Allocator, chunk: *Chunk, globals: *Globals, diags: *Diagnostics) !Compiler {
+        return .{
+            .chunk = chunk,
+            .locals = try std.ArrayList(Local).initCapacity(alloc, 16),
+            .alloc = alloc,
+            .globals = globals,
+            .diags = diags,
+        };
     }
 
     pub fn deinit(self: *Compiler) void {
@@ -149,7 +274,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn declareLocal(self: *Compiler, name: []const u8) !void {
+    pub fn declareLocal(self: *Compiler, name: []const u8) !void {
         if (self.locals.items.len >= std.math.maxInt(u8)) return error.TooManyLocals;
         try self.locals.append(self.alloc, .{ .name = name, .depth = self.scope_depth });
     }
@@ -169,14 +294,28 @@ pub const Compiler = struct {
             .boolean => |b| try self.chunk.emitOp(if (b) .op_true else .op_false),
             .string => return error.StringsNotYetSupported,
             .variable => |name| {
-                const slot = self.resolveLocal(name) orelse return error.UndefinedVariable;
-                try self.chunk.emitOp(.op_get_local);
-                try self.chunk.emitByte(slot);
+                if (self.resolveLocal(name)) |slot| {
+                    try self.chunk.emitOp(.op_get_local);
+                    try self.chunk.emitByte(slot);
+                    return;
+                }
+
+                if (self.globals.get(name)) |slot| {
+                    try self.chunk.emitOp(.op_get_global);
+                    try self.chunk.emitByte(slot);
+                    return;
+                }
+
+                try self.diags.report("Undefined variable '{s}'.", .{name});
+                return error.UndefinedVariable;
             },
 
             .assign => |a| {
                 try self.compileExpr(a.value);
-                const slot = self.resolveLocal(a.name) orelse return error.UndefinedVariable;
+                const slot = self.resolveLocal(a.name) orelse {
+                    try self.diags.report("Cannot assign to undefined variable '{s}'.", .{a.name});
+                    return error.UndefinedVariable;
+                };
                 try self.chunk.emitOp(.op_set_local);
                 try self.chunk.emitByte(slot);
             },
@@ -190,12 +329,25 @@ pub const Compiler = struct {
                 }
             },
 
+            .call => |c| {
+                try self.compileExpr(c.callee);
+                for (c.args) |arg| try self.compileExpr(arg);
+                try self.chunk.emitOp(.op_call);
+                if (c.args.len > std.math.maxInt(u8)) return error.TooManyArguments;
+                try self.chunk.emitByte(@intCast(c.args.len));
+            },
+
             .binary => |b| {
                 switch (b.op) {
                     .amp_amp => {
                         // Dead code elimination
                         if (b.left.* == .boolean and b.left.boolean == false) {
                             try self.compileExpr(b.left);
+                            return;
+                        }
+
+                        if (b.right.* == .boolean and b.right.boolean == false) {
+                            try self.compileExpr(b.right);
                             return;
                         }
 
@@ -216,6 +368,11 @@ pub const Compiler = struct {
                             return;
                         }
 
+                        if (b.right.* == .boolean and b.right.boolean == true) {
+                            try self.compileExpr(b.right);
+                            return;
+                        }
+
                         try self.compileExpr(b.left);
                         const else_jump = try self.chunk.emitJump(.op_jump_if_false);
                         const end_jump = try self.chunk.emitJump(.op_jump);
@@ -227,6 +384,57 @@ pub const Compiler = struct {
                         try self.chunk.patchJump(end_jump);
                     },
                     else => {
+                        //Superinstructions
+
+                        // op_add_local_local, op_sub_local_local
+                        if (b.op == .plus and b.left.* == .variable and b.right.* == .variable) {
+                            if (self.resolveLocal(b.left.variable)) |slot_a| {
+                                if (self.resolveLocal(b.right.variable)) |slot_b| {
+                                    try self.chunk.emitOp(.op_add_local_local);
+
+                                    try self.chunk.emitByte(slot_a);
+                                    try self.chunk.emitByte(slot_b);
+                                    return;
+                                }
+                            }
+                        }
+                        if (b.op == .minus and b.left.* == .variable and b.right.* == .variable) {
+                            if (self.resolveLocal(b.left.variable)) |slot_a| {
+                                if (self.resolveLocal(b.right.variable)) |slot_b| {
+                                    try self.chunk.emitOp(.op_sub_local_local);
+
+                                    try self.chunk.emitByte(slot_a);
+                                    try self.chunk.emitByte(slot_b);
+                                    return;
+                                }
+                            }
+                        }
+
+                        // op_sub_local_imm, op_plus_local_imm, op_less_local_imm, op_greater_local_imm
+                        if (((b.op == .minus or b.op == .plus) or (b.op == .lt or b.op == .gt)) and
+                            b.left.* == .variable and
+                            b.right.* == .number and
+                            b.right.number >= 0 and
+                            b.right.number <= 255 and
+                            b.right.number == @trunc(b.right.number))
+                        {
+                            if (self.resolveLocal(b.left.variable)) |slot| {
+                                const op: OpCode = switch (b.op) {
+                                    .minus => .op_sub_local_imm,
+                                    .plus => .op_plus_local_imm,
+                                    .lt => .op_less_local_imm,
+                                    .gt => .op_greater_local_imm,
+                                    else => return error.Unreachable,
+                                };
+                                try self.chunk.emitOp(op);
+
+                                try self.chunk.emitByte(slot);
+                                try self.chunk.emitByte(@intFromFloat(b.right.number));
+
+                                return;
+                            }
+                        }
+
                         try self.compileExpr(b.left);
                         try self.compileExpr(b.right);
                         try self.chunk.emitOp(switch (b.op) {
@@ -284,6 +492,20 @@ pub const Compiler = struct {
             .ret_stmt => |r| {
                 try self.compileExpr(r);
                 try self.chunk.emitOp(.op_return);
+            },
+
+            .fn_decl => |*f| {
+                const slot: u8 = @intCast(self.globals.count());
+                try self.globals.put(f.name, slot);
+
+                const function = try self.alloc.create(Function);
+                function.* = try Function.init(self.alloc);
+
+                try function.compile(f, self.globals, self.diags);
+
+                try self.chunk.emitConstant(.{ .function = function });
+                try self.chunk.emitOp(.op_define_global);
+                try self.chunk.emitByte(slot);
             },
         }
     }

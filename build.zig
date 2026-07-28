@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+
     const exe = b.addExecutable(.{
         .name = "szymciolang",
         .root_module = b.createModule(.{
