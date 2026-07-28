@@ -49,3 +49,6 @@ zig build
 In it current state the ```fib()``` function from example code executes **~2.0 seconds** faster than equivalent code in Python (3.14.6) with Zelky taking around 8 seconds where as Python takes around 10 seconds.
 The benchmarks where done using Hyperfine with warm up of 10.
 To be fair, this is a result of implementing specific superinstructions (super opcodes) in the Zelky VM that are particularly helpful for this example. This benchmark is of course purely synthetic and not really representative of the real world performance (if you can even say real world as Zelky can't yet interact with the machine in any useful way.
+
+## License
+MIT
