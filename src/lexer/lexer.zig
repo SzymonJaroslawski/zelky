@@ -75,7 +75,7 @@ pub const Lexer = struct {
 
         const c = self.advance();
 
-        if (isDigit(c)) return self.number();
+        if (std.ascii.isDigit(c)) return self.number();
         if (isAlpha(c)) return self.identifierOrKeyword();
 
         return switch (c) {
@@ -131,7 +131,7 @@ pub const Lexer = struct {
     }
 
     fn skipWhitespaceAndComments(self: *Lexer) void {
-        while (true) {
+        while (!self.isAtEnd()) {
             const c = self.peek();
             switch (c) {
                 ' ', '\t', '\r' => _ = self.advance(),
@@ -154,11 +154,11 @@ pub const Lexer = struct {
     }
 
     fn number(self: *Lexer) Token {
-        while (isDigit(self.peek())) _ = self.advance();
+        while (std.ascii.isDigit(self.peek())) _ = self.advance();
 
-        if (self.peek() == '.' and isDigit(self.peekNext())) {
-            _ = self.advance();
-            while (isDigit(self.peek())) _ = self.advance();
+        if (self.peek() == '.' and std.ascii.isDigit(self.peekNext())) {
+            _ = self.advance(); // consume '.'
+            while (std.ascii.isDigit(self.peek())) _ = self.advance();
         }
 
         return self.makeToken(.number);
@@ -177,7 +177,11 @@ pub const Lexer = struct {
 
     fn string(self: *Lexer) Token {
         while (self.peek() != '"' and !self.isAtEnd()) {
-            if (self.peek() == '\n') self.line += 1;
+            if (self.peek() == '\n') {
+                self.line += 1;
+            } else if (self.peek() == '\\' and self.peekNext() != 0) {
+                _ = self.advance(); // Skip backslash
+            }
             _ = self.advance();
         }
 
@@ -185,7 +189,7 @@ pub const Lexer = struct {
             return self.makeToken(.invalid);
         }
 
-        _ = self.advance();
+        _ = self.advance(); // Closing quote
         return self.makeToken(.string);
     }
 
@@ -197,15 +201,11 @@ pub const Lexer = struct {
         };
     }
 
-    fn isDigit(c: u8) bool {
-        return c >= '0' and c <= '9';
-    }
-
     fn isAlpha(c: u8) bool {
-        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
+        return std.ascii.isAlphabetic(c) or c == '_';
     }
 
     fn isAlphaNumeric(c: u8) bool {
-        return isAlpha(c) or isDigit(c);
+        return isAlpha(c) or std.ascii.isDigit(c);
     }
 };
