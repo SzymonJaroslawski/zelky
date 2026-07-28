@@ -1,5 +1,6 @@
 const std = @import("std");
 const lex = @import("../lexer/lexer.zig");
+
 const Token = lex.Token;
 const TokenKind = lex.TokenKind;
 
@@ -29,6 +30,35 @@ pub const Expr = union(enum) {
         callee: *Expr,
         args: []*Expr,
     },
+
+    pub fn deinit(self: *Expr, alloc: std.mem.Allocator) void {
+        switch (self.*) {
+            .number, .boolean, .string, .variable => {},
+            .unary => |u| {
+                u.operand.deinit(alloc);
+                alloc.destroy(u.operand);
+            },
+            .binary => |b| {
+                b.left.deinit(alloc);
+                alloc.destroy(b.left);
+                b.right.deinit(alloc);
+                alloc.destroy(b.right);
+            },
+            .assign => |a| {
+                a.value.deinit(alloc);
+                alloc.destroy(a.value);
+            },
+            .call => |c| {
+                c.callee.deinit(alloc);
+                alloc.destroy(c.callee);
+                for (c.args) |arg| {
+                    arg.deinit(alloc);
+                    alloc.destroy(arg);
+                }
+                alloc.free(c.args);
+            },
+        }
+    }
 };
 
 pub const Stmt = union(enum) {
@@ -49,12 +79,52 @@ pub const Stmt = union(enum) {
     ret_stmt: *Expr,
 
     fn_decl: FnDecl,
+
+    pub fn deinit(self: *Stmt, alloc: std.mem.Allocator) void {
+        switch (self.*) {
+            .expr_stmt => |e| {
+                e.deinit(alloc);
+                alloc.destroy(e);
+            },
+            .block => |stmts| {
+                for (stmts) |*s| s.deinit(alloc);
+                alloc.free(stmts);
+            },
+            .if_stmt => |i| {
+                i.condition.deinit(alloc);
+                alloc.destroy(i.condition);
+                i.then_branch.deinit(alloc);
+                alloc.destroy(i.then_branch);
+                if (i.else_branch) |eb| {
+                    eb.deinit(alloc);
+                    alloc.destroy(eb);
+                }
+            },
+            .let_stmt => |l| {
+                l.initializer.deinit(alloc);
+                alloc.destroy(l.initializer);
+            },
+            .ret_stmt => |r| {
+                r.deinit(alloc);
+                alloc.destroy(r);
+            },
+            .fn_decl => |*f| {
+                f.deinit(alloc);
+            },
+        }
+    }
 };
 
 pub const FnDecl = struct {
     name: []const u8,
     params: [][]const u8,
     body: *Stmt,
+
+    pub fn deinit(self: *FnDecl, alloc: std.mem.Allocator) void {
+        alloc.free(self.params);
+        self.body.deinit(alloc);
+        alloc.destroy(self.body);
+    }
 };
 
 fn infixBindingPower(kind: TokenKind) ?struct { left: u8, right: u8 } {
@@ -124,43 +194,32 @@ pub const Parser = struct {
         return self.advance();
     }
 
-    fn alloc_expr(self: *Parser, e: Expr) ParserError!*Expr {
-        const ptr = try self.alloc.create(Expr);
+    fn allocExpr(self: *Parser, e: Expr) ParserError!*Expr {
+        const ptr = self.alloc.create(Expr) catch return ParserError.OutOfMemory;
         ptr.* = e;
         return ptr;
     }
 
-    fn alloc_stmt(self: *Parser, s: Stmt) !*Stmt {
-        const ptr = try self.alloc.create(Stmt);
+    fn allocStmt(self: *Parser, s: Stmt) ParserError!*Stmt {
+        const ptr = self.alloc.create(Stmt) catch return ParserError.OutOfMemory;
         ptr.* = s;
         return ptr;
     }
 
+    // --- Statement Parsing ---
+
     pub fn parseProgram(self: *Parser) ParserError!Stmt {
         var stmts = try std.ArrayList(Stmt).initCapacity(self.alloc, 0);
+        errdefer {
+            for (stmts.items) |*s| s.deinit(self.alloc);
+            stmts.deinit(self.alloc);
+        }
+
         while (self.current.kind != .eof) {
             try stmts.append(self.alloc, try self.parseStmt());
         }
 
         return .{ .block = try stmts.toOwnedSlice(self.alloc) };
-    }
-
-    pub fn parseExpr(self: *Parser) !*Expr {
-        const expr = try self.parseBindingPower(0);
-
-        if (self.current.kind == .eq) {
-            _ = self.advance();
-
-            const name = switch (expr.*) {
-                .variable => |v| v,
-                else => return self.fail("invalid assignment", null, ParserError.UnexpectedToken),
-            };
-
-            const value = try self.parseExpr();
-            return self.alloc_expr(.{ .assign = .{ .name = name, .value = value } });
-        }
-
-        return expr;
     }
 
     pub fn parseStmt(self: *Parser) ParserError!Stmt {
@@ -178,6 +237,11 @@ pub const Parser = struct {
         _ = try self.expect(.lbrace);
 
         var stmts = try std.ArrayList(Stmt).initCapacity(self.alloc, 0);
+        errdefer {
+            for (stmts.items) |*s| s.deinit(self.alloc);
+            stmts.deinit(self.alloc);
+        }
+
         while (self.current.kind != .rbrace and self.current.kind != .eof) {
             try stmts.append(self.alloc, try self.parseStmt());
         }
@@ -190,14 +254,22 @@ pub const Parser = struct {
         _ = try self.expect(.kw_if);
         _ = try self.expect(.lparen);
         const cond = try self.parseExpr();
+        errdefer {
+            cond.deinit(self.alloc);
+            self.alloc.destroy(cond);
+        }
         _ = try self.expect(.rparen);
 
-        const then_branch = try self.alloc_stmt(try self.parseStmt());
+        const then_branch = try self.allocStmt(try self.parseStmt());
+        errdefer {
+            then_branch.deinit(self.alloc);
+            self.alloc.destroy(then_branch);
+        }
 
         var else_branch: ?*Stmt = null;
         if (self.current.kind == .kw_else) {
             _ = self.advance();
-            else_branch = try self.alloc_stmt(try self.parseStmt());
+            else_branch = try self.allocStmt(try self.parseStmt());
         }
 
         return .{ .if_stmt = .{ .condition = cond, .then_branch = then_branch, .else_branch = else_branch } };
@@ -227,6 +299,8 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
 
         var params = try std.ArrayList([]const u8).initCapacity(self.alloc, 5);
+        errdefer params.deinit(self.alloc);
+
         if (self.current.kind != .rparen) {
             while (true) {
                 const param = try self.expect(.identifier);
@@ -237,7 +311,7 @@ pub const Parser = struct {
         }
         _ = try self.expect(.rparen);
 
-        const body = try self.alloc_stmt(try self.parseBlock());
+        const body = try self.allocStmt(try self.parseBlock());
 
         return .{ .fn_decl = .{
             .name = name.lexeme,
@@ -252,24 +326,25 @@ pub const Parser = struct {
         return .{ .expr_stmt = expr };
     }
 
-    fn parseCall(self: *Parser) ParserError!*Expr {
-        var expr = try self.parseAtom();
+    // --- Expression & Pratt Engine ---
 
-        while (self.current.kind == .lparen) {
+    pub fn parseExpr(self: *Parser) ParserError!*Expr {
+        const expr = try self.parseBindingPower(0);
+
+        if (self.current.kind == .eq) {
             _ = self.advance();
 
-            var args = try std.ArrayList(*Expr).initCapacity(self.alloc, 5);
+            const name = switch (expr.*) {
+                .variable => |v| v,
+                else => {
+                    expr.deinit(self.alloc);
+                    self.alloc.destroy(expr);
+                    return self.fail("invalid assignment target", null, ParserError.UnexpectedToken);
+                },
+            };
 
-            if (self.current.kind != .rparen) {
-                while (true) {
-                    try args.append(self.alloc, try self.parseExpr());
-                    if (self.current.kind != .comma) break;
-                    _ = self.advance();
-                }
-            }
-            _ = try self.expect(.rparen);
-
-            expr = try self.alloc_expr(.{ .call = .{ .callee = expr, .args = try args.toOwnedSlice(self.alloc) } });
+            const value = try self.parseExpr();
+            return self.allocExpr(.{ .assign = .{ .name = name, .value = value } });
         }
 
         return expr;
@@ -287,7 +362,7 @@ pub const Parser = struct {
             _ = self.advance();
             const right = try self.parseBindingPower(bp.right);
 
-            left = try self.alloc_expr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+            left = try self.allocExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
         }
 
         return left;
@@ -297,9 +372,39 @@ pub const Parser = struct {
         if (prefixBindingPower(self.current.kind)) |bp| {
             const op = self.advance().kind;
             const operand = try self.parseBindingPower(bp);
-            return self.alloc_expr(.{ .unary = .{ .op = op, .operand = operand } });
+            return self.allocExpr(.{ .unary = .{ .op = op, .operand = operand } });
         }
         return self.parseCall();
+    }
+
+    fn parseCall(self: *Parser) ParserError!*Expr {
+        var expr = try self.parseAtom();
+
+        while (self.current.kind == .lparen) {
+            _ = self.advance();
+
+            var args = try std.ArrayList(*Expr).initCapacity(self.alloc, 5);
+            errdefer {
+                for (args.items) |arg| {
+                    arg.deinit(self.alloc);
+                    self.alloc.destroy(arg);
+                }
+                args.deinit(self.alloc);
+            }
+
+            if (self.current.kind != .rparen) {
+                while (true) {
+                    try args.append(self.alloc, try self.parseExpr());
+                    if (self.current.kind != .comma) break;
+                    _ = self.advance();
+                }
+            }
+            _ = try self.expect(.rparen);
+
+            expr = try self.allocExpr(.{ .call = .{ .callee = expr, .args = try args.toOwnedSlice(self.alloc) } });
+        }
+
+        return expr;
     }
 
     fn parseAtom(self: *Parser) ParserError!*Expr {
@@ -307,24 +412,24 @@ pub const Parser = struct {
         return switch (tok.kind) {
             .number => blk: {
                 _ = self.advance();
-                const value = std.fmt.parseFloat(f64, tok.lexeme) catch return ParserError.BadNumber;
-                break :blk self.alloc_expr(.{ .number = value });
+                const value = std.fmt.parseFloat(f64, tok.lexeme) catch return self.fail("invalid number format", null, ParserError.BadNumber);
+                break :blk self.allocExpr(.{ .number = value });
             },
             .string => blk: {
                 _ = self.advance();
-                break :blk self.alloc_expr(.{ .string = tok.lexeme });
+                break :blk self.allocExpr(.{ .string = tok.lexeme });
             },
             .kw_true => blk: {
                 _ = self.advance();
-                break :blk self.alloc_expr(.{ .boolean = true });
+                break :blk self.allocExpr(.{ .boolean = true });
             },
             .kw_false => blk: {
                 _ = self.advance();
-                break :blk self.alloc_expr(.{ .boolean = false });
+                break :blk self.allocExpr(.{ .boolean = false });
             },
             .identifier => blk: {
                 _ = self.advance();
-                break :blk self.alloc_expr(.{ .variable = tok.lexeme });
+                break :blk self.allocExpr(.{ .variable = tok.lexeme });
             },
             .lparen => blk: {
                 _ = self.advance();
@@ -332,7 +437,7 @@ pub const Parser = struct {
                 _ = try self.expect(.rparen);
                 break :blk inner;
             },
-            else => ParserError.UnexpectedToken,
+            else => self.fail("expected expression atom", null, ParserError.UnexpectedToken),
         };
     }
 };
