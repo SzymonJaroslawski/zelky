@@ -137,53 +137,6 @@ pub const Value = union(enum) {
     function: *const Function,
 };
 
-pub fn disassemble(chunk: *const Chunk) !void {
-    var offset: usize = 0;
-    while (offset < chunk.code.items.len) {
-        offset = try disassembleInstruction(chunk, offset);
-    }
-}
-
-fn disassembleInstruction(chunk: *const Chunk, offset: usize) !usize {
-    std.debug.print("{d:0>4}  ", .{offset});
-    const op: OpCode = @enumFromInt(chunk.code.items[offset]);
-
-    return switch (op) {
-        .op_constant => blk: {
-            const index = chunk.code.items[offset + 1];
-            std.debug.print("OP_CONSTANT      {d} ({any})\n", .{ index, chunk.constants.items[index] });
-            break :blk offset + 2;
-        },
-        .op_get_local, .op_set_local, .op_get_global, .op_define_global => blk: {
-            const slot = chunk.code.items[offset + 1];
-            std.debug.print("{s: <16} slot {d}\n", .{ @tagName(op), slot });
-            break :blk offset + 2;
-        },
-        .op_call => blk: {
-            const argc = chunk.code.items[offset + 1];
-            std.debug.print("OP_CALL          argc {d}\n", .{argc});
-            break :blk offset + 2;
-        },
-        .op_sub_local_imm, .op_less_local_imm => blk: {
-            const slot = chunk.code.items[offset + 1];
-            const imm = chunk.code.items[offset + 2];
-            std.debug.print("{s: <16} slot {d}, imm {d}\n", .{ @tagName(op), slot, imm });
-            break :blk offset + 3;
-        },
-        .op_jump, .op_jump_if_false => blk: {
-            const jump_offset = (@as(u16, chunk.code.items[offset + 1]) << 8) | chunk.code.items[offset + 2];
-            const target = offset + 3 + jump_offset;
-            std.debug.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
-            break :blk offset + 3;
-        },
-        // Everything else is a single byte with no operand.
-        else => blk: {
-            std.debug.print("{s}\n", .{@tagName(op)});
-            break :blk offset + 1;
-        },
-    };
-}
-
 pub const Chunk = struct {
     code: std.ArrayList(u8),
     constants: std.ArrayList(Value),
