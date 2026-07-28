@@ -1,7 +1,7 @@
 .{
-    .name = .szymciolang,
+    .name = .zelky,
     .version = "0.0.1",
-    .fingerprint = 0x6448e3a321d6d125,
+    .fingerprint = 0x97a541f282bba73f,
     .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",

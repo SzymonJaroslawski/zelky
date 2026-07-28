@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 
 const Io = std.Io;
 
-const szymciolang = @import("szymciolang");
 const lex = @import("lexer/lexer.zig");
 const par = @import("parser/parser.zig");
 const lvm = @import("vm/vm.zig");
