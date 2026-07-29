@@ -22,6 +22,7 @@ pub const OpCode = enum(u8) {
     op_pop,
     op_jump_if_false,
     op_jump,
+    op_loop,
     op_get_local,
     op_get_global,
     op_set_local,
@@ -153,6 +154,14 @@ pub const Chunk = struct {
         try self.emitByte(0xff);
         try self.emitByte(0xff);
         return self.code.items.len - 2;
+    }
+
+    pub fn emitLoop(self: *Chunk, loop_start: usize) !void {
+        try self.emitOp(.op_loop);
+        const distance = self.code.items.len - loop_start + 2;
+        if (distance > std.math.maxInt(u16)) return error.JumpTooFar;
+        try self.emitByte(@intCast((distance >> 8) & 0xff));
+        try self.emitByte(@intCast(distance & 0xff));
     }
 
     pub fn patchJump(self: *Chunk, offset: usize) !void {
@@ -460,6 +469,17 @@ pub const Compiler = struct {
 
                 try self.chunk.patchJump(else_jump);
                 self.had_return = then_was_dead and else_was_dead;
+            },
+
+            .while_stmt => |w| {
+                const loop_start = self.chunk.code.items.len;
+                try self.compileExpr(w.condition);
+                const exit_jump = try self.chunk.emitJump(.op_jump_if_false);
+                try self.chunk.emitOp(.op_pop);
+                try self.compileStmt(w.body);
+                try self.chunk.emitLoop(loop_start);
+                try self.chunk.patchJump(exit_jump);
+                try self.chunk.emitOp(.op_pop);
             },
 
             .let_stmt => |l| {

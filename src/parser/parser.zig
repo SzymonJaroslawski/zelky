@@ -30,35 +30,6 @@ pub const Expr = union(enum) {
         callee: *Expr,
         args: []*Expr,
     },
-
-    pub fn deinit(self: *Expr, alloc: std.mem.Allocator) void {
-        switch (self.*) {
-            .number, .boolean, .string, .variable => {},
-            .unary => |u| {
-                u.operand.deinit(alloc);
-                alloc.destroy(u.operand);
-            },
-            .binary => |b| {
-                b.left.deinit(alloc);
-                alloc.destroy(b.left);
-                b.right.deinit(alloc);
-                alloc.destroy(b.right);
-            },
-            .assign => |a| {
-                a.value.deinit(alloc);
-                alloc.destroy(a.value);
-            },
-            .call => |c| {
-                c.callee.deinit(alloc);
-                alloc.destroy(c.callee);
-                for (c.args) |arg| {
-                    arg.deinit(alloc);
-                    alloc.destroy(arg);
-                }
-                alloc.free(c.args);
-            },
-        }
-    }
 };
 
 pub const Stmt = union(enum) {
@@ -71,6 +42,11 @@ pub const Stmt = union(enum) {
         else_branch: ?*Stmt,
     },
 
+    while_stmt: struct {
+        condition: *Expr,
+        body: *Stmt,
+    },
+
     let_stmt: struct {
         name: []const u8,
         initializer: *Expr,
@@ -79,52 +55,12 @@ pub const Stmt = union(enum) {
     ret_stmt: *Expr,
 
     fn_decl: FnDecl,
-
-    pub fn deinit(self: *Stmt, alloc: std.mem.Allocator) void {
-        switch (self.*) {
-            .expr_stmt => |e| {
-                e.deinit(alloc);
-                alloc.destroy(e);
-            },
-            .block => |stmts| {
-                for (stmts) |*s| s.deinit(alloc);
-                alloc.free(stmts);
-            },
-            .if_stmt => |i| {
-                i.condition.deinit(alloc);
-                alloc.destroy(i.condition);
-                i.then_branch.deinit(alloc);
-                alloc.destroy(i.then_branch);
-                if (i.else_branch) |eb| {
-                    eb.deinit(alloc);
-                    alloc.destroy(eb);
-                }
-            },
-            .let_stmt => |l| {
-                l.initializer.deinit(alloc);
-                alloc.destroy(l.initializer);
-            },
-            .ret_stmt => |r| {
-                r.deinit(alloc);
-                alloc.destroy(r);
-            },
-            .fn_decl => |*f| {
-                f.deinit(alloc);
-            },
-        }
-    }
 };
 
 pub const FnDecl = struct {
     name: []const u8,
     params: [][]const u8,
     body: *Stmt,
-
-    pub fn deinit(self: *FnDecl, alloc: std.mem.Allocator) void {
-        alloc.free(self.params);
-        self.body.deinit(alloc);
-        alloc.destroy(self.body);
-    }
 };
 
 fn infixBindingPower(kind: TokenKind) ?struct { left: u8, right: u8 } {
@@ -208,10 +144,6 @@ pub const Parser = struct {
 
     pub fn parseProgram(self: *Parser) ParserError!Stmt {
         var stmts = try std.ArrayList(Stmt).initCapacity(self.alloc, 0);
-        errdefer {
-            for (stmts.items) |*s| s.deinit(self.alloc);
-            stmts.deinit(self.alloc);
-        }
 
         while (self.current.kind != .eof) {
             try stmts.append(self.alloc, try self.parseStmt());
@@ -224,6 +156,8 @@ pub const Parser = struct {
         return switch (self.current.kind) {
             .lbrace => self.parseBlock(),
             .kw_if => self.parseIf(),
+            .kw_while => self.parseWhile(),
+            .kw_for => self.parseFor(),
             .kw_let => self.parseLet(),
             .kw_return => self.parseReturn(),
             .kw_func => self.parseFnDecl(),
@@ -235,10 +169,6 @@ pub const Parser = struct {
         _ = try self.expect(.lbrace);
 
         var stmts = try std.ArrayList(Stmt).initCapacity(self.alloc, 0);
-        errdefer {
-            for (stmts.items) |*s| s.deinit(self.alloc);
-            stmts.deinit(self.alloc);
-        }
 
         while (self.current.kind != .rbrace and self.current.kind != .eof) {
             try stmts.append(self.alloc, try self.parseStmt());
@@ -252,18 +182,9 @@ pub const Parser = struct {
         _ = try self.expect(.kw_if);
         _ = try self.expect(.lparen);
         const cond = try self.parseExpr();
-        errdefer {
-            cond.deinit(self.alloc);
-            self.alloc.destroy(cond);
-        }
         _ = try self.expect(.rparen);
 
         const then_branch = try self.allocStmt(try self.parseStmt());
-        errdefer {
-            then_branch.deinit(self.alloc);
-            self.alloc.destroy(then_branch);
-        }
-
         var else_branch: ?*Stmt = null;
         if (self.current.kind == .kw_else) {
             _ = self.advance();
@@ -271,6 +192,39 @@ pub const Parser = struct {
         }
 
         return .{ .if_stmt = .{ .condition = cond, .then_branch = then_branch, .else_branch = else_branch } };
+    }
+
+    fn parseWhile(self: *Parser) ParserError!Stmt {
+        _ = try self.expect(.kw_while);
+        _ = try self.expect(.lparen);
+        const cond = try self.parseExpr();
+        _ = try self.expect(.rparen);
+        const body = try self.allocStmt(try self.parseStmt());
+        return .{ .while_stmt = .{ .condition = cond, .body = body } };
+    }
+
+    fn parseFor(self: *Parser) ParserError!Stmt {
+        _ = try self.expect(.kw_for);
+        _ = try self.expect(.lparen);
+        const init_stmt = try self.parseStmt();
+        const cond = try self.parseExpr();
+        _ = try self.expect(.semicolon);
+        const increment = try self.parseExpr();
+        _ = try self.expect(.rparen);
+        const body = try self.parseStmt();
+
+        var while_body_stmts = try self.alloc.alloc(Stmt, 2);
+        while_body_stmts[0] = body;
+        while_body_stmts[1] = .{ .expr_stmt = increment };
+
+        var program_stmts = try self.alloc.alloc(Stmt, 2);
+        program_stmts[0] = init_stmt;
+        program_stmts[1] = .{ .while_stmt = .{
+            .condition = cond,
+            .body = try self.allocStmt(.{ .block = while_body_stmts }),
+        } };
+
+        return .{ .block = program_stmts };
     }
 
     fn parseLet(self: *Parser) ParserError!Stmt {
@@ -297,8 +251,6 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
 
         var params = try std.ArrayList([]const u8).initCapacity(self.alloc, 5);
-        errdefer params.deinit(self.alloc);
-
         if (self.current.kind != .rparen) {
             while (true) {
                 const param = try self.expect(.identifier);
@@ -332,11 +284,7 @@ pub const Parser = struct {
 
             const name = switch (expr.*) {
                 .variable => |v| v,
-                else => {
-                    expr.deinit(self.alloc);
-                    self.alloc.destroy(expr);
-                    return self.fail("invalid assignment target", null, ParserError.UnexpectedToken);
-                },
+                else => return self.fail("invalid assignment target", null, ParserError.UnexpectedToken),
             };
 
             const value = try self.parseExpr();
@@ -380,14 +328,6 @@ pub const Parser = struct {
             _ = self.advance();
 
             var args = try std.ArrayList(*Expr).initCapacity(self.alloc, 5);
-            errdefer {
-                for (args.items) |arg| {
-                    arg.deinit(self.alloc);
-                    self.alloc.destroy(arg);
-                }
-                args.deinit(self.alloc);
-            }
-
             if (self.current.kind != .rparen) {
                 while (true) {
                     try args.append(self.alloc, try self.parseExpr());

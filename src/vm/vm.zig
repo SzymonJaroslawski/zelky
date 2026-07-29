@@ -330,6 +330,11 @@ pub const Vm = struct {
                         if (is_false) frame.ip += offset;
                         continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
+                    .op_loop => {
+                        const offset = frame.readU16();
+                        frame.ip -= offset;
+                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
+                    },
                     .op_call => {
                         const argc = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;

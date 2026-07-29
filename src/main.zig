@@ -26,12 +26,11 @@ pub fn main() !void {
     defer arena.deinit();
 
     const source =
-        \\func ncr(n, k) {
-        \\  if (k == 0 || k == n) { return 1; }
-        \\  return ncr(n - 1, k - 1) + ncr(n - 1, k);
+        \\let n = 0;
+        \\for(let i = 0; i < 10; i = i + 1) {
+        \\  n = n + i;
         \\}
-        \\
-        \\return ncr(24, 12);
+        \\return n;
     ;
 
     var lexer = lex.Lexer.init(source);

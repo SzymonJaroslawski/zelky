@@ -86,6 +86,17 @@ pub fn printStmt(s: *const par.Stmt, depth: usize) anyerror!void {
             std.debug.print(")\n", .{});
         },
 
+        .while_stmt => |w| {
+            std.debug.print("(while ", .{});
+            try printExpr(w.condition);
+            std.debug.print("\n", .{});
+
+            try printStmt(w.body, depth + 1);
+
+            printIndent(depth);
+            std.debug.print(")\n", .{});
+        },
+
         .let_stmt => |l| {
             std.debug.print("(let {s} = ", .{l.name});
             try printExpr(l.initializer);
@@ -151,6 +162,12 @@ fn disassembleInstruction(chunk: *const Chunk, offset: usize) !usize {
         .op_jump, .op_jump_if_false => blk: {
             const jump_offset = (@as(u16, chunk.code.items[offset + 1]) << 8) | chunk.code.items[offset + 2];
             const target = offset + 3 + jump_offset;
+            std.debug.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
+            break :blk offset + 3;
+        },
+        .op_loop => blk: {
+            const jump_offset = (@as(u16, chunk.code.items[offset + 1]) << 8) | chunk.code.items[offset + 2];
+            const target = offset + 3 - jump_offset;
             std.debug.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
             break :blk offset + 3;
         },
