@@ -154,6 +154,11 @@ fn disassembleInstruction(chunk: *const Chunk, offset: usize) !usize {
             std.debug.print("{s: <16} {d} -> {d}\n", .{ @tagName(op), offset, target });
             break :blk offset + 3;
         },
+        .op_return_global, .op_return_local => blk: {
+            const slot = chunk.code.items[offset + 1];
+            std.debug.print("{s} slot {d}\n", .{ @tagName(op), slot });
+            break :blk offset + 2;
+        },
         // Everything else is a single byte with no operand.
         else => blk: {
             std.debug.print("{s}\n", .{@tagName(op)});

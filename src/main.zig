@@ -64,9 +64,9 @@ pub fn main() !void {
         }
         return err;
     };
-    try chunk.emitOp(.op_halt);
 
     std.debug.print("\n---op code---\n", .{});
+    try helpers.disassemble(&chunk);
     for (chunk.constants.items) |cns| {
         const func = switch (cns) {
             .function => |f| f,

@@ -354,6 +354,42 @@ pub const Vm = struct {
                         frame = &self.frames[self.frames_top - 1];
                         continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
+
+                    .op_return_local => {
+                        const slot = frame.function.chunk.code.items[frame.ip];
+                        frame.ip += 1;
+                        const value = self.stack[slot + frame.base];
+
+                        self.frames_top -= 1;
+                        const finished_frame = self.frames[self.frames_top];
+                        if (self.frames_top == 0) {
+                            return value;
+                        }
+
+                        self.stack_top = finished_frame.base - 1;
+                        self.push(value);
+
+                        frame = &self.frames[self.frames_top - 1];
+                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
+                    },
+                    .op_return_global => {
+                        const slot = frame.function.chunk.code.items[frame.ip];
+                        frame.ip += 1;
+                        const value = self.globals[slot];
+
+                        self.frames_top -= 1;
+                        const finished_frame = self.frames[self.frames_top];
+                        if (self.frames_top == 0) {
+                            return value;
+                        }
+
+                        self.stack_top = finished_frame.base - 1;
+                        self.push(value);
+
+                        frame = &self.frames[self.frames_top - 1];
+                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
+                    },
+
                     .op_return => {
                         const result = self.pop();
                         self.frames_top -= 1;

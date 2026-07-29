@@ -38,6 +38,9 @@ pub const OpCode = enum(u8) {
 
     op_add_local_local,
     op_sub_local_local,
+
+    op_return_local,
+    op_return_global,
 };
 
 const is_debug = builtin.mode == .Debug;
@@ -191,8 +194,10 @@ pub const Function = struct {
 
         try compl.compileStmt(fndec.body);
 
-        try self.chunk.emitConstant(.{ .number = 0 });
-        try self.chunk.emitOp(.op_return);
+        if (!compl.had_return) {
+            try self.chunk.emitConstant(.{ .number = 0 });
+            try self.chunk.emitOp(.op_return);
+        }
     }
 };
 
@@ -205,6 +210,7 @@ pub const Compiler = struct {
     chunk: *Chunk,
     locals: std.ArrayList(Local),
     scope_depth: usize = 0,
+    had_return: bool = false,
     alloc: std.mem.Allocator,
     globals: *Globals,
     diags: *Diagnostics,
@@ -231,7 +237,7 @@ pub const Compiler = struct {
         self.scope_depth -= 1;
         while (self.locals.items.len > 0 and self.locals.items[self.locals.items.len - 1].depth > self.scope_depth) {
             _ = self.locals.pop();
-            try self.chunk.emitOp(.op_pop);
+            if (!self.had_return) try self.chunk.emitOp(.op_pop);
         }
     }
 
@@ -274,12 +280,21 @@ pub const Compiler = struct {
 
             .assign => |a| {
                 try self.compileExpr(a.value);
-                const slot = self.resolveLocal(a.name) orelse {
-                    try self.diags.report("Cannot assign to undefined variable '{s}'.", .{a.name});
-                    return error.UndefinedVariable;
-                };
-                try self.chunk.emitOp(.op_set_local);
-                try self.chunk.emitByte(slot);
+
+                if (self.resolveLocal(a.name)) |slot| {
+                    try self.chunk.emitOp(.op_set_local);
+                    try self.chunk.emitByte(slot);
+                    return;
+                }
+
+                if (self.globals.get(a.name)) |slot| {
+                    try self.chunk.emitOp(.op_define_global); // Ensure op_set_global is in OpCode enum
+                    try self.chunk.emitByte(slot);
+                    return;
+                }
+
+                try self.diags.report("Cannot assign to undefined variable '{s}'.", .{a.name});
+                return error.UndefinedVariable;
             },
 
             .unary => |u| {
@@ -367,47 +382,50 @@ pub const Compiler = struct {
     }
 
     fn tryEmitLocalLocal(self: *Compiler, b: anytype) !bool {
-        if ((b.op == .plus or b.op == .minus) and
-            b.left.* == .variable and
-            b.right.* == .variable)
-        {
-            if (self.resolveLocal(b.left.variable)) |slot_a| {
-                if (self.resolveLocal(b.right.variable)) |slot_b| {
-                    const op: OpCode = if (b.op == .plus) .op_add_local_local else .op_sub_local_local;
-                    try self.chunk.emitOp(op);
-                    try self.chunk.emitByte(slot_a);
-                    try self.chunk.emitByte(slot_b);
-                    return true;
-                }
-            }
-        }
-        return false;
+        // 1. Ensure the operator is plus or minus
+        if (b.op != .plus and b.op != .minus) return false;
+
+        // 2. Ensure both left and right sides are variable expressions
+        if (b.left.* != .variable or b.right.* != .variable) return false;
+
+        // 3. BOTH must resolve to valid local stack slots
+        const slot_a = self.resolveLocal(b.left.variable) orelse return false;
+        const slot_b = self.resolveLocal(b.right.variable) orelse return false;
+
+        // 4. Emit the specialized local-local superinstruction
+        const op: OpCode = if (b.op == .plus) .op_add_local_local else .op_sub_local_local;
+        try self.chunk.emitOp(op);
+        try self.chunk.emitByte(slot_a);
+        try self.chunk.emitByte(slot_b);
+
+        return true;
     }
 
     fn tryEmitLocalImm(self: *Compiler, b: anytype) !bool {
         const is_supported_op = (b.op == .minus or b.op == .plus or b.op == .lt or b.op == .gt);
-        if (is_supported_op and
-            b.left.* == .variable and
-            b.right.* == .number and
-            b.right.number >= 0 and
-            b.right.number <= 255 and
-            b.right.number == @trunc(b.right.number))
-        {
-            if (self.resolveLocal(b.left.variable)) |slot| {
-                const op: OpCode = switch (b.op) {
-                    .minus => .op_sub_local_imm,
-                    .plus => .op_plus_local_imm,
-                    .lt => .op_less_local_imm,
-                    .gt => .op_greater_local_imm,
-                    else => unreachable,
-                };
-                try self.chunk.emitOp(op);
-                try self.chunk.emitByte(slot);
-                try self.chunk.emitByte(@intFromFloat(b.right.number));
-                return true;
-            }
-        }
-        return false;
+        if (!is_supported_op) return false;
+
+        if (b.left.* != .variable or b.right.* != .number) return false;
+
+        const num = b.right.number;
+        if (num < 0 or num > 255 or num != @trunc(num)) return false;
+
+        // Must resolve to a local variable slot
+        const slot = self.resolveLocal(b.left.variable) orelse return false;
+
+        const op: OpCode = switch (b.op) {
+            .minus => .op_sub_local_imm,
+            .plus => .op_plus_local_imm,
+            .lt => .op_less_local_imm,
+            .gt => .op_greater_local_imm,
+            else => unreachable,
+        };
+
+        try self.chunk.emitOp(op);
+        try self.chunk.emitByte(slot);
+        try self.chunk.emitByte(@intCast(@as(u8, @intFromFloat(num))));
+
+        return true;
     }
 
     pub fn compileStmt(self: *Compiler, stmt: *const parser.Stmt) !void {
@@ -428,14 +446,20 @@ pub const Compiler = struct {
 
                 const then_jump = try self.chunk.emitJump(.op_jump_if_false);
                 try self.chunk.emitOp(.op_pop);
+
                 try self.compileStmt(i.then_branch);
+                const then_was_dead = self.had_return;
 
                 const else_jump = try self.chunk.emitJump(.op_jump);
                 try self.chunk.patchJump(then_jump);
                 try self.chunk.emitOp(.op_pop);
 
+                self.had_return = false;
                 if (i.else_branch) |else_branch| try self.compileStmt(else_branch);
+                const else_was_dead = self.had_return;
+
                 try self.chunk.patchJump(else_jump);
+                self.had_return = then_was_dead and else_was_dead;
             },
 
             .let_stmt => |l| {
@@ -444,8 +468,25 @@ pub const Compiler = struct {
             },
 
             .ret_stmt => |r| {
+                if (r.* == .variable) {
+                    if (self.resolveLocal(r.variable)) |slot| {
+                        try self.chunk.emitOp(.op_return_local);
+                        try self.chunk.emitByte(slot);
+                        self.had_return = true;
+                        return;
+                    }
+
+                    if (self.globals.get(r.variable)) |slot| {
+                        try self.chunk.emitOp(.op_return_global);
+                        try self.chunk.emitByte(slot);
+                        self.had_return = true;
+                        return;
+                    }
+                }
+
                 try self.compileExpr(r);
                 try self.chunk.emitOp(.op_return);
+                self.had_return = true;
             },
 
             .fn_decl => |*f| {
