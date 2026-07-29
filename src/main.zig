@@ -46,20 +46,13 @@ pub fn main() !void {
     try helpers.printStmt(&stmt, 0);
 
     var chunk = try com.Chunk.init(alloc);
-    defer chunk.deinit();
-
     var globals = std.StringHashMap(u8).init(alloc);
-    defer globals.deinit();
-
     var diags = try com.Diagnostics.init(alloc);
-    defer diags.deinit();
 
     var compiler = try com.Compiler.init(alloc, &chunk, &globals, &diags);
-    defer compiler.deinit();
     compiler.compileStmt(&stmt) catch |err| {
         if (diags.hasErrors()) {
             diags.printAll();
-            //try com.disassemble(&chunk);
         }
         return err;
     };
@@ -77,7 +70,6 @@ pub fn main() !void {
     }
 
     var vm = try lvm.Vm.init(alloc, &chunk);
-    defer vm.deinit();
 
     if (try vm.run()) |v| {
         std.debug.print("vm result: ", .{});

@@ -153,7 +153,7 @@ fn disassembleInstruction(chunk: *const Chunk, offset: usize) !usize {
             std.debug.print("OP_CALL          argc {d}\n", .{argc});
             break :blk offset + 2;
         },
-        .op_sub_local_imm, .op_less_local_imm => blk: {
+        .op_sub_local_imm, .op_less_local_imm, .op_plus_local_imm, .op_greater_local_imm => blk: {
             const slot = chunk.code.items[offset + 1];
             const imm = chunk.code.items[offset + 2];
             std.debug.print("{s: <16} slot {d}, imm {d}\n", .{ @tagName(op), slot, imm });

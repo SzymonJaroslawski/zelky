@@ -44,7 +44,7 @@ pub const OpCode = enum(u8) {
     op_return_global,
 };
 
-const is_debug = builtin.mode == .Debug;
+const is_debug = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 
 pub const Diagnostic = struct {
     message: []u8,
@@ -67,16 +67,6 @@ pub const Diagnostics = struct {
             .list = try std.ArrayList(Diagnostic).initCapacity(alloc, 0),
             .alloc = alloc,
         };
-    }
-
-    pub fn deinit(self: *Diagnostics) void {
-        if (!is_debug) return;
-
-        // Free each dynamically allocated message buffer before freeing the list
-        for (self.list.items) |diag| {
-            self.alloc.free(diag.message);
-        }
-        self.list.deinit(self.alloc);
     }
 
     pub fn report(self: *Diagnostics, comptime format: []const u8, args: anytype) error{ CompileError, OutOfMemory }!void {
@@ -119,18 +109,6 @@ pub const Chunk = struct {
             .code = try std.ArrayList(u8).initCapacity(alloc, 256),
             .constants = try std.ArrayList(Value).initCapacity(alloc, 32),
         };
-    }
-
-    pub fn deinit(self: *Chunk) void {
-        for (self.constants.items) |val| {
-            if (val == .function) {
-                var func = @constCast(val.function);
-                func.deinit();
-                self.alloc.destroy(func);
-            }
-        }
-        self.code.deinit(self.alloc);
-        self.constants.deinit(self.alloc);
     }
 
     pub fn emitOp(self: *Chunk, op: OpCode) !void {
@@ -186,13 +164,8 @@ pub const Function = struct {
         };
     }
 
-    pub fn deinit(self: *Function) void {
-        self.chunk.deinit();
-    }
-
     pub fn compile(self: *Function, fndec: *const parser.FnDecl, globals: *Globals, diags: *Diagnostics) anyerror!void {
         var compl = try Compiler.init(self.alloc, &self.chunk, globals, diags);
-        defer compl.deinit();
 
         self.name = fndec.name;
         self.arity = fndec.params.len;
@@ -232,10 +205,6 @@ pub const Compiler = struct {
             .globals = globals,
             .diags = diags,
         };
-    }
-
-    pub fn deinit(self: *Compiler) void {
-        self.locals.deinit(self.alloc);
     }
 
     fn beginScope(self: *Compiler) void {
