@@ -206,8 +206,6 @@ pub const Parser = struct {
         return ptr;
     }
 
-    // --- Statement Parsing ---
-
     pub fn parseProgram(self: *Parser) ParserError!Stmt {
         var stmts = try std.ArrayList(Stmt).initCapacity(self.alloc, 0);
         errdefer {
@@ -325,8 +323,6 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
         return .{ .expr_stmt = expr };
     }
-
-    // --- Expression & Pratt Engine ---
 
     pub fn parseExpr(self: *Parser) ParserError!*Expr {
         const expr = try self.parseBindingPower(0);
