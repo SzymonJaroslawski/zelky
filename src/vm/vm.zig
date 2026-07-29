@@ -24,11 +24,17 @@ const CallFrame = struct {
     /// Points to the starting index in the VM stack where this frame's locals begin
     base: usize,
 
-    fn readU16(self: *CallFrame) u16 {
-        const hi: u16 = self.function.chunk.code.items[self.ip];
-        const lo: u16 = self.function.chunk.code.items[self.ip + 1];
+    /// Reads a single byte from code and advances the instruction pointer
+    fn readByte(self: *CallFrame) u8 {
+        const byte = self.function.chunk.code.items[self.ip];
+        self.ip += 1;
+        return byte;
+    }
 
-        self.ip += 2;
+    /// Reads a 16-bit big-endian integer from code and advances the IP
+    fn readU16(self: *CallFrame) u16 {
+        const hi: u16 = self.readByte();
+        const lo: u16 = self.readByte();
         return (hi << 8) | lo;
     }
 };
@@ -74,23 +80,61 @@ pub const Vm = struct {
         return self.stack[self.stack_top];
     }
 
-    fn popNumber(self: *Vm) !f64 {
+    fn peek(self: *const Vm) Value {
+        return self.stack[self.stack_top - 1];
+    }
+
+    fn popNumber(self: *Vm) VmError!f64 {
         return switch (self.pop()) {
             .number => |n| n,
             .boolean, .function => VmError.TypeMismatch,
         };
     }
 
-    fn peek(self: *Vm) !Value {
-        return self.stack[self.stack_top - 1];
+    inline fn popTwoNumbers(self: *Vm) VmError!struct { a: f64, b: f64 } {
+        const b = try self.popNumber();
+        const a = try self.popNumber();
+        return .{ .a = a, .b = b };
+    }
+
+    fn getLocalNumber(self: *const Vm, frame: *const CallFrame, slot: usize) VmError!f64 {
+        return switch (self.stack[slot + frame.base]) {
+            .number => |n| n,
+            else => VmError.TypeMismatch,
+        };
+    }
+
+    inline fn localImmOp(self: *Vm, frame: *CallFrame) VmError!struct { local: f64, imm: f64 } {
+        const slot = frame.readByte();
+        const imm = frame.readByte();
+        const local = try self.getLocalNumber(frame, slot);
+        return .{ .local = local, .imm = @floatFromInt(imm) };
+    }
+
+    inline fn localLocalOp(self: *Vm, frame: *CallFrame) VmError!struct { a: f64, b: f64 } {
+        const slot_a = frame.readByte();
+        const slot_b = frame.readByte();
+        const a = try self.getLocalNumber(frame, slot_a);
+        const b = try self.getLocalNumber(frame, slot_b);
+        return .{ .a = a, .b = b };
+    }
+
+    inline fn finishFrameReturn(self: *Vm, frame_ptr: **CallFrame, return_val: Value) ?Value {
+        self.frames_top -= 1;
+        if (self.frames_top == 0) return return_val;
+
+        const finished_frame = self.frames[self.frames_top];
+        self.stack_top = finished_frame.base - 1;
+        self.push(return_val);
+
+        frame_ptr.* = &self.frames[self.frames_top - 1];
+        return null;
     }
 
     pub fn run(self: *Vm) VmError!?Value {
         var frame = &self.frames[self.frames_top - 1];
         const initial_op: OpCode = @enumFromInt(frame.function.chunk.code.items[frame.ip]);
 
-        // Using inline switch for bytecode dispatch. This compiles down to direct threaded code
-        // (a computed goto), avoiding standard loop/switch overhead.
         sw: switch (initial_op) {
             inline else => |current_op| {
                 frame.ip += 1;
@@ -98,37 +142,28 @@ pub const Vm = struct {
                 switch (current_op) {
                     // Constants & Literals
                     .op_constant => {
-                        const idx = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const idx = frame.readByte();
                         self.push(frame.function.chunk.constants.items[idx]);
                     },
-                    .op_true => {
-                        self.push(.{ .boolean = true });
-                    },
-                    .op_false => {
-                        self.push(.{ .boolean = false });
-                    },
+                    .op_true => self.push(.{ .boolean = true }),
+                    .op_false => self.push(.{ .boolean = false }),
 
-                    // Binary Operations
+                    // Binary Math
                     .op_add => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .number = a + b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .number = ops.a + ops.b });
                     },
                     .op_sub => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .number = a - b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .number = ops.a - ops.b });
                     },
                     .op_mul => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .number = a * b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .number = ops.a * ops.b });
                     },
                     .op_div => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .number = a / b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .number = ops.a / ops.b });
                     },
 
                     // Unary Operations
@@ -137,8 +172,7 @@ pub const Vm = struct {
                         self.push(.{ .number = -a });
                     },
                     .op_not => {
-                        const a = self.pop();
-                        switch (a) {
+                        switch (self.pop()) {
                             .boolean => |bl| self.push(.{ .boolean = !bl }),
                             .number, .function => return VmError.TypeMismatch,
                         }
@@ -146,142 +180,74 @@ pub const Vm = struct {
 
                     // Comparisons
                     .op_equal => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a == b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a == ops.b });
                     },
                     .op_not_equal => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a != b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a != ops.b });
                     },
                     .op_less => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a < b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a < ops.b });
                     },
                     .op_less_equal => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a <= b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a <= ops.b });
                     },
                     .op_greater => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a > b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a > ops.b });
                     },
                     .op_greater_equal => {
-                        const b = try self.popNumber();
-                        const a = try self.popNumber();
-                        self.push(.{ .boolean = a >= b });
+                        const ops = try self.popTwoNumbers();
+                        self.push(.{ .boolean = ops.a >= ops.b });
                     },
 
                     // Local + Immediate Operations
                     .op_sub_local_imm => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        const imm = frame.function.chunk.code.items[frame.ip + 1];
-                        frame.ip += 2;
-
-                        const local = switch (self.stack[slot + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-                        self.push(.{ .number = local - @as(f64, @floatFromInt(imm)) });
+                        const args = try self.localImmOp(frame);
+                        self.push(.{ .number = args.local - args.imm });
                     },
                     .op_plus_local_imm => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        const imm = frame.function.chunk.code.items[frame.ip + 1];
-                        frame.ip += 2;
-
-                        const local = switch (self.stack[slot + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-                        self.push(.{ .number = local + @as(f64, @floatFromInt(imm)) });
+                        const args = try self.localImmOp(frame);
+                        self.push(.{ .number = args.local + args.imm });
                     },
                     .op_less_local_imm => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        const imm = frame.function.chunk.code.items[frame.ip + 1];
-                        frame.ip += 2;
-
-                        const local = switch (self.stack[slot + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-                        self.push(.{ .boolean = local < @as(f64, @floatFromInt(imm)) });
+                        const args = try self.localImmOp(frame);
+                        self.push(.{ .boolean = args.local < args.imm });
                     },
                     .op_greater_local_imm => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        const imm = frame.function.chunk.code.items[frame.ip + 1];
-                        frame.ip += 2;
-
-                        const local = switch (self.stack[slot + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-                        self.push(.{ .boolean = local > @as(f64, @floatFromInt(imm)) });
+                        const args = try self.localImmOp(frame);
+                        self.push(.{ .boolean = args.local > args.imm });
                     },
 
                     // Local + Local Operations
                     .op_add_local_local => {
-                        const slot_a = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
-                        const slot_b = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
-
-                        const a = switch (self.stack[slot_a + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-
-                        const b = switch (self.stack[slot_b + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-
-                        self.push(.{ .number = a + b });
+                        const args = try self.localLocalOp(frame);
+                        self.push(.{ .number = args.a + args.b });
                     },
                     .op_sub_local_local => {
-                        const slot_a = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
-                        const slot_b = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
-
-                        const a = switch (self.stack[slot_a + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-
-                        const b = switch (self.stack[slot_b + frame.base]) {
-                            .number => |n| n,
-                            else => return VmError.TypeMismatch,
-                        };
-
-                        self.push(.{ .number = a - b });
+                        const args = try self.localLocalOp(frame);
+                        self.push(.{ .number = args.a - args.b });
                     },
 
                     // Variables
-                    .op_pop => {
-                        _ = self.pop();
-                    },
+                    .op_pop => _ = self.pop(),
                     .op_get_local => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const slot = frame.readByte();
                         self.push(self.stack[slot + frame.base]);
                     },
                     .op_set_local => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
-                        self.stack[frame.base + slot] = self.stack[self.stack_top - 1];
+                        const slot = frame.readByte();
+                        self.stack[frame.base + slot] = self.peek();
                     },
                     .op_get_global => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const slot = frame.readByte();
                         self.push(self.globals[slot]);
                     },
                     .op_define_global => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const slot = frame.readByte();
                         std.debug.assert(slot < globals_max);
                         self.globals[slot] = self.pop();
                     },
@@ -293,7 +259,7 @@ pub const Vm = struct {
                     },
                     .op_jump_if_false => {
                         const offset = frame.readU16();
-                        const condition = try self.peek();
+                        const condition = self.peek();
 
                         const is_false = switch (condition) {
                             .boolean => |bl| !bl,
@@ -307,8 +273,7 @@ pub const Vm = struct {
                         frame.ip -= offset;
                     },
                     .op_call => {
-                        const argc = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const argc = frame.readByte();
 
                         const callee_idx = self.stack_top - 1 - argc;
                         const callee = self.stack[callee_idx];
@@ -323,60 +288,27 @@ pub const Vm = struct {
                         std.debug.assert(self.frames_top < frames_max);
                         self.frames[self.frames_top] = .{
                             .function = function,
-                            .base = callee_idx + 1, // Arguments start immediately after the callable on the stack
+                            .base = callee_idx + 1,
                         };
                         self.frames_top += 1;
 
                         frame = &self.frames[self.frames_top - 1];
                     },
 
+                    // Returns
                     .op_return_local => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const slot = frame.readByte();
                         const value = self.stack[slot + frame.base];
-
-                        self.frames_top -= 1;
-                        const finished_frame = self.frames[self.frames_top];
-                        if (self.frames_top == 0) {
-                            return value;
-                        }
-
-                        self.stack_top = finished_frame.base - 1;
-                        self.push(value);
-
-                        frame = &self.frames[self.frames_top - 1];
+                        if (self.finishFrameReturn(&frame, value)) |ret| return ret;
                     },
                     .op_return_global => {
-                        const slot = frame.function.chunk.code.items[frame.ip];
-                        frame.ip += 1;
+                        const slot = frame.readByte();
                         const value = self.globals[slot];
-
-                        self.frames_top -= 1;
-                        const finished_frame = self.frames[self.frames_top];
-                        if (self.frames_top == 0) {
-                            return value;
-                        }
-
-                        self.stack_top = finished_frame.base - 1;
-                        self.push(value);
-
-                        frame = &self.frames[self.frames_top - 1];
+                        if (self.finishFrameReturn(&frame, value)) |ret| return ret;
                     },
-
                     .op_return => {
                         const result = self.pop();
-                        self.frames_top -= 1;
-                        const finished_frame = self.frames[self.frames_top];
-
-                        if (self.frames_top == 0) {
-                            return result;
-                        }
-
-                        // Wipe the local variables and the called function from the stack, replacing it with the return value
-                        self.stack_top = finished_frame.base - 1;
-                        self.push(result);
-
-                        frame = &self.frames[self.frames_top - 1];
+                        if (self.finishFrameReturn(&frame, result)) |ret| return ret;
                     },
 
                     .op_halt => return null,
