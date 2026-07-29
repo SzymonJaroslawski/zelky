@@ -42,6 +42,9 @@ pub const OpCode = enum(u8) {
 
     op_return_local,
     op_return_global,
+
+    //TODO: Add op_jump_if_less, op_jump_if_greater, jump_if_less_equal etc.
+    // Add op_ind_local, op_dec_local
 };
 
 const is_debug = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;

@@ -101,15 +101,12 @@ pub const Vm = struct {
                         const idx = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;
                         self.push(frame.function.chunk.constants.items[idx]);
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_true => {
                         self.push(.{ .boolean = true });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_false => {
                         self.push(.{ .boolean = false });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Binary Operations
@@ -117,32 +114,27 @@ pub const Vm = struct {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .number = a + b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_sub => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .number = a - b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_mul => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .number = a * b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_div => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .number = a / b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Unary Operations
                     .op_negate => {
                         const a = try self.popNumber();
                         self.push(.{ .number = -a });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_not => {
                         const a = self.pop();
@@ -150,7 +142,6 @@ pub const Vm = struct {
                             .boolean => |bl| self.push(.{ .boolean = !bl }),
                             .number, .function => return VmError.TypeMismatch,
                         }
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Comparisons
@@ -158,37 +149,31 @@ pub const Vm = struct {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a == b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_not_equal => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a != b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_less => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a < b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_less_equal => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a <= b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_greater => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a > b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_greater_equal => {
                         const b = try self.popNumber();
                         const a = try self.popNumber();
                         self.push(.{ .boolean = a >= b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Local + Immediate Operations
@@ -202,7 +187,6 @@ pub const Vm = struct {
                             else => return VmError.TypeMismatch,
                         };
                         self.push(.{ .number = local - @as(f64, @floatFromInt(imm)) });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_plus_local_imm => {
                         const slot = frame.function.chunk.code.items[frame.ip];
@@ -214,7 +198,6 @@ pub const Vm = struct {
                             else => return VmError.TypeMismatch,
                         };
                         self.push(.{ .number = local + @as(f64, @floatFromInt(imm)) });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_less_local_imm => {
                         const slot = frame.function.chunk.code.items[frame.ip];
@@ -226,7 +209,6 @@ pub const Vm = struct {
                             else => return VmError.TypeMismatch,
                         };
                         self.push(.{ .boolean = local < @as(f64, @floatFromInt(imm)) });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]); // Bug Fix: removed +1 offset here
                     },
                     .op_greater_local_imm => {
                         const slot = frame.function.chunk.code.items[frame.ip];
@@ -238,7 +220,6 @@ pub const Vm = struct {
                             else => return VmError.TypeMismatch,
                         };
                         self.push(.{ .boolean = local > @as(f64, @floatFromInt(imm)) });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]); // Bug Fix: removed +1 offset here
                     },
 
                     // Local + Local Operations
@@ -259,7 +240,6 @@ pub const Vm = struct {
                         };
 
                         self.push(.{ .number = a + b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_sub_local_local => {
                         const slot_a = frame.function.chunk.code.items[frame.ip];
@@ -278,45 +258,38 @@ pub const Vm = struct {
                         };
 
                         self.push(.{ .number = a - b });
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Variables
                     .op_pop => {
                         _ = self.pop();
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_get_local => {
                         const slot = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;
                         self.push(self.stack[slot + frame.base]);
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_set_local => {
                         const slot = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;
                         self.stack[frame.base + slot] = self.stack[self.stack_top - 1];
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_get_global => {
                         const slot = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;
                         self.push(self.globals[slot]);
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_define_global => {
                         const slot = frame.function.chunk.code.items[frame.ip];
                         frame.ip += 1;
                         std.debug.assert(slot < globals_max);
                         self.globals[slot] = self.pop();
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     // Control Flow
                     .op_jump => {
                         const offset = frame.readU16();
                         frame.ip += offset;
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_jump_if_false => {
                         const offset = frame.readU16();
@@ -328,12 +301,10 @@ pub const Vm = struct {
                         };
 
                         if (is_false) frame.ip += offset;
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_loop => {
                         const offset = frame.readU16();
                         frame.ip -= offset;
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_call => {
                         const argc = frame.function.chunk.code.items[frame.ip];
@@ -357,7 +328,6 @@ pub const Vm = struct {
                         self.frames_top += 1;
 
                         frame = &self.frames[self.frames_top - 1];
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     .op_return_local => {
@@ -375,7 +345,6 @@ pub const Vm = struct {
                         self.push(value);
 
                         frame = &self.frames[self.frames_top - 1];
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
                     .op_return_global => {
                         const slot = frame.function.chunk.code.items[frame.ip];
@@ -392,7 +361,6 @@ pub const Vm = struct {
                         self.push(value);
 
                         frame = &self.frames[self.frames_top - 1];
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     .op_return => {
@@ -409,11 +377,12 @@ pub const Vm = struct {
                         self.push(result);
 
                         frame = &self.frames[self.frames_top - 1];
-                        continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
                     },
 
                     .op_halt => return null,
                 }
+
+                continue :sw @enumFromInt(frame.function.chunk.code.items[frame.ip]);
             },
         }
     }
