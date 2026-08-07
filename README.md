@@ -5,7 +5,7 @@ Zelky is a interpreted language written in Zig from scratch made as an exercise 
 ## Example code
 
 ```
-func fig(n) {
+func fib(n) {
  if (n <= 1) {
   return n; 
  }
