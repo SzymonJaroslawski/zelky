@@ -2,16 +2,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const helpers = @import("./helpers.zig");
-const lex = @import("lexer/lexer.zig");
-const par = @import("parser/parser.zig");
-const lvm = @import("vm/vm.zig");
-const com = @import("vm/compiler.zig");
+const load = @import("./module/loader.zig");
+const lvm = @import("./vm/vm.zig");
 
 const Io = std.Io;
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const gpa, const is_debug = switch (builtin.mode) {
         .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
         .ReleaseFast, .ReleaseSmall => .{ std.heap.page_allocator, false },
@@ -25,49 +23,23 @@ pub fn main() !void {
     const alloc = arena.allocator();
     defer arena.deinit();
 
-    const source =
-        \\let n = 0;
-        \\for(let i = 0; i < 10; i = i + 1) {
-        \\  n = n + i;
-        \\}
-        \\return n;
-    ;
+    const args = try init.minimal.args.toSlice(alloc);
+    const path = args[1];
 
-    var lexer = lex.Lexer.init(source);
-    var parser = par.Parser.init(alloc, &lexer);
+    var loader = try load.Loader.init(alloc, init);
+    var chunk = try loader.loadAndCompile(path, is_debug);
 
-    const stmt = parser.parseProgram() catch |err| {
-        if (parser.diagnostic) |d| {
-            std.debug.print("parse error at line {d}: {s} (got '{s}')\n", .{ d.line, d.message, d.lexeme });
-        }
-        return err;
-    };
-
-    try helpers.printStmt(&stmt, 0);
-
-    var chunk = try com.Chunk.init(alloc);
-    var globals = std.StringHashMap(u8).init(alloc);
-    var diags = try com.Diagnostics.init(alloc);
-
-    var compiler = try com.Compiler.init(alloc, &chunk, &globals, &diags);
-    compiler.compileStmt(&stmt) catch |err| {
-        if (diags.hasErrors()) {
-            diags.printAll();
-        }
-        return err;
-    };
-
-    std.debug.print("\n---op code---\n", .{});
-    try helpers.disassemble(&chunk);
-    for (chunk.constants.items) |cns| {
-        const func = switch (cns) {
-            .function => |f| f,
-            else => continue,
-        };
-
-        std.debug.print("op code for function {s}:\n", .{func.name});
-        try helpers.disassemble(&func.chunk);
-    }
+    //std.debug.print("\n---op code---\n", .{});
+    //try helpers.disassemble(&chunk);
+    //for (chunk.constants.items) |cns| {
+    //   const func = switch (cns) {
+    //       .function => |f| f,
+    //       else => continue,
+    //   };
+    //
+    //    std.debug.print("op code for function {s}:\n", .{func.name});
+    //    try helpers.disassemble(&func.chunk);
+    //}
 
     var vm = try lvm.Vm.init(alloc, &chunk);
 

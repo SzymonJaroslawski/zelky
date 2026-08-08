@@ -109,6 +109,10 @@ pub fn printStmt(s: *const par.Stmt, depth: usize) anyerror!void {
             std.debug.print(")\n", .{});
         },
 
+        .import_stmt => |i| {
+            std.debug.print("(import {s} )\n", .{i.path});
+        },
+
         .fn_decl => |f| {
             std.debug.print("(fn {s}(", .{f.name});
             for (f.params, 0..) |param, idx| {

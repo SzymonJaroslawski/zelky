@@ -14,6 +14,8 @@ pub const TokenKind = enum {
     kw_let,
     kw_true,
     kw_false,
+    kw_pub,
+    kw_imp,
 
     plus,
     minus,
@@ -57,6 +59,8 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "let", .kw_let },
     .{ "true", .kw_true },
     .{ "false", .kw_false },
+    .{ "pub", .kw_pub },
+    .{ "imp", .kw_imp },
 });
 
 pub const Lexer = struct {
