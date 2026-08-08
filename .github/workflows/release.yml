@@ -23,17 +23,17 @@ jobs:
 
       - name: Build x86_64 release
         run: |
-          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=true
           mv zig-out/bin/zelky zig-out/bin/zelky-x86_64-linux-musl
 
       - name: Build aarch64 release
         run: |
-          zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl
+          zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl -Dstrip=true
           mv zig-out/bin/zelky zig-out/bin/zelky-aarch64-linux-musl
 
       - name: Build Windows x86_64 release
         run: |
-          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-gnu
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-gnu -Dstrip=true
           mv zig-out/bin/zelky.exe zig-out/bin/zelky-x86_64-windows-gnu.exe
 
       - name: Create GitHub Release
