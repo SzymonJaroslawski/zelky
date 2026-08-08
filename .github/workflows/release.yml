@@ -31,6 +31,11 @@ jobs:
           zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl
           mv zig-out/bin/zelky zig-out/bin/zelky-aarch64-linux-musl
 
+      - name: Build Windows x86_64 release
+        run: |
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows-gnu
+          mv zig-out/bin/zelky.exe zig-out/bin/zelky-x86_64-windows-gnu.exe
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
