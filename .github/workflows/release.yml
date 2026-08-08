@@ -22,10 +22,14 @@ jobs:
           version: 0.16.0
 
       - name: Build x86_64 release
-        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl
+        run: |
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl
+          mv zig-out/bin/zelky zig-out/bin/zelky-x86_64-linux-musl
 
       - name: Build aarch64 release
-        run: zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl
+        run: | 
+          zig build -Doptimize=ReleaseFast -Dtarget=aarch64-linux-musl
+          mv zig-out/bin/zelky zig-out/bin/zelky-aarch64-linux-musl
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
