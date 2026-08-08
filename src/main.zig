@@ -6,10 +6,13 @@ const load = @import("./module/loader.zig");
 const lvm = @import("./vm/vm.zig");
 
 const Io = std.Io;
+const build_opt = @import("build_options");
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
 pub fn main(init: std.process.Init) !void {
+    std.debug.print("Zelky version: {s}\n", .{build_opt.version});
+
     const gpa, const is_debug = switch (builtin.mode) {
         .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
         .ReleaseFast, .ReleaseSmall => .{ std.heap.page_allocator, false },
