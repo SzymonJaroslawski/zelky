@@ -28,6 +28,8 @@ func fib(n) {
  return plus(fib(n - 1), fib(n - 2));
 }
 
+return fib(40);
+
 // plus.zel
 pub func plus(a, b) {
  return a + b;
