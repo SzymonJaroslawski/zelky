@@ -363,17 +363,13 @@ pub const Compiler = struct {
     }
 
     fn tryEmitLocalLocal(self: *Compiler, b: anytype) !bool {
-        // 1. Ensure the operator is plus or minus
         if (b.op != .plus and b.op != .minus) return false;
 
-        // 2. Ensure both left and right sides are variable expressions
         if (b.left.* != .variable or b.right.* != .variable) return false;
 
-        // 3. BOTH must resolve to valid local stack slots
         const slot_a = self.resolveLocal(b.left.variable) orelse return false;
         const slot_b = self.resolveLocal(b.right.variable) orelse return false;
 
-        // 4. Emit the specialized local-local superinstruction
         const op: OpCode = if (b.op == .plus) .op_add_local_local else .op_sub_local_local;
         try self.chunk.emitOp(op);
         try self.chunk.emitByte(slot_a);
@@ -480,6 +476,8 @@ pub const Compiler = struct {
                 try self.chunk.emitOp(.op_return);
                 self.had_return = true;
             },
+
+            .import_stmt => {},
 
             .fn_decl => |*f| {
                 const slot: u8 = @intCast(self.globals.count());

@@ -15,6 +15,28 @@ func fib(n) {
 return fib(40);
 ```
 
+### Module example
+
+```
+// main.zel
+imp "./plus.zel";
+
+func fib(n) {
+ if (n <= 1) {
+  return n;
+ }
+ return plus(fib(n - 1), fib(n - 2));
+}
+
+// plus.zel
+pub func plus(a, b) {
+ return a + b;
+}
+```
+
+Right now the language compiler does not handle namespaces, so if another file like plus2.zel specifies an add function and it is imported after plus.zel,
+the function from plus2.zel will override the add function from plus.zel
+
 ## To-Do list
 
 - [x] Constants
@@ -32,8 +54,12 @@ return fib(40);
 - [ ] Structs
 - [ ] Enums
 - [ ] Unions
-- [ ] REPL (as of right now, the code to be executed (source code only, not bytecode) is compiled with the bianry)
-- [ ] And more... (standard library, modules etc.)
+- [ ] REPL
+- [ ] Modules
+  - [x] Importing
+  - [x] Exporting (pub keyword)
+  - [ ] Namespaces
+- [ ] And more... (standard library etc.)
 
 ## Build instructions
 

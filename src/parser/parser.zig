@@ -55,11 +55,16 @@ pub const Stmt = union(enum) {
     ret_stmt: *Expr,
 
     fn_decl: FnDecl,
+
+    import_stmt: struct {
+        path: []const u8,
+    },
 };
 
 pub const FnDecl = struct {
     name: []const u8,
     params: [][]const u8,
+    public: bool = false,
     body: *Stmt,
 };
 
@@ -160,7 +165,8 @@ pub const Parser = struct {
             .kw_for => self.parseFor(),
             .kw_let => self.parseLet(),
             .kw_return => self.parseReturn(),
-            .kw_func => self.parseFnDecl(),
+            .kw_func, .kw_pub => self.parseFnDecl(),
+            .kw_imp => self.parseImpStmt(),
             else => self.parseExprStmt(),
         };
     }
@@ -246,6 +252,10 @@ pub const Parser = struct {
     }
 
     fn parseFnDecl(self: *Parser) ParserError!Stmt {
+        const public = self.current.kind == .kw_pub;
+        if (public) _ = self.advance();
+        if (public and self.current.kind != .kw_func) return self.fail("unexpected identifier after pub", .kw_func, ParserError.UnexpectedToken);
+
         _ = try self.expect(.kw_func);
         const name = try self.expect(.identifier);
         _ = try self.expect(.lparen);
@@ -266,8 +276,17 @@ pub const Parser = struct {
         return .{ .fn_decl = .{
             .name = name.lexeme,
             .params = try params.toOwnedSlice(self.alloc),
+            .public = public,
             .body = body,
         } };
+    }
+
+    fn parseImpStmt(self: *Parser) ParserError!Stmt {
+        _ = try self.expect(.kw_imp);
+        const path_tok = try self.expect(.string);
+        _ = try self.expect(.semicolon);
+
+        return .{ .import_stmt = .{ .path = path_tok.lexeme[1 .. path_tok.lexeme.len - 1] } };
     }
 
     fn parseExprStmt(self: *Parser) ParserError!Stmt {
